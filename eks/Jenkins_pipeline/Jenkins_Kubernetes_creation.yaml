@@ -1,0 +1,114 @@
+pipeline {
+	agent any
+	tools {
+	    maven "MAVEN3"
+	    jdk "OracleJDK8"
+	}
+	
+    environment {
+        registryCredential = 'ecr:eu-west-1:awscredentials'
+        appRegistry = "320442627588.dkr.ecr.eu-west-1.amazonaws.com/jenkins_repo"
+        siteprojectRegistry = "https://320442627588.dkr.ecr.eu-west-1.amazonaws.com"
+    }      
+	stages {
+	    stage('Fetch Kubernetes code') {
+            steps {
+				git branch: 'main', url: 'https://github.com/fanfanafankianki/Kubernetes_Project'
+            }
+	    }
+	
+		stage('Fetch CloudFormation code') {
+			steps {
+				sh "mkdir -p CloudFormation"
+				dir("CloudFormation") {
+					git branch: 'main', url: 'https://github.com/fanfanafankianki/CloudFormation_Project'
+				}
+			}   
+		}
+
+		stage('Archiving') {
+			steps {
+				sh 'ls'
+				sh 'pwd'
+			}
+			post {
+				success {
+					echo "Now archiving..."
+					archiveArtifacts artifacts: '*/**', excludes: 'README.md'
+				}
+			}
+		}
+        stage('Deploy Kubernetes Cluster') {
+            steps {
+                script {
+                    withCredentials([[
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "awscredentials",
+                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                    ]]) {
+
+
+                        def stackName = "myKubernetesCluster"
+                        def templateFile = "EKS_template.yaml"
+                        def region = "eu-west-1"
+                        sh "chmod 644 ${WORKSPACE}/EKS_template.yaml"
+                        sh "aws cloudformation create-stack --stack-name ${stackName} --template-body file://${WORKSPACE}/EKS_template.yaml --region ${region}"
+
+                        def stackStatus = sh(script: "aws cloudformation describe-stacks --stack-name ${stackName} --query Stacks[0].StackStatus --output text --region ${region}", returnStdout: true).trim()
+                        def maxAttempts = 20
+                        def attempts = 0
+                        while (stackStatus != 'CREATE_COMPLETE' && attempts < maxAttempts) {
+                            echo "Stack status: ${stackStatus}"
+                            sleep 60
+                            stackStatus = sh(script: "aws cloudformation describe-stacks --stack-name ${stackName} --query Stacks[0].StackStatus --output text --region ${region}", returnStdout: true).trim()
+                            attempts++
+                        }
+                        if (stackStatus == 'CREATE_COMPLETE') {
+                            echo "Stack created successfully."
+                        } else {
+                            echo "Stack creation timeout: 1200 seconds reached. Current status: ${stackStatus}"
+                            error("Stack creation failed: timeout reached.")
+                        }
+                    }
+                }
+            }
+        }
+        stage('Deploy Kubernetes Nodes') {
+            steps {
+                script {
+                    withCredentials([[
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "awscredentials",
+                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                    ]]) {
+
+
+                        def stackName = "myKubernetesNode"
+                        def templateFile = "EKS_Node_template"
+                        def region = "eu-west-1"
+                        sh "chmod 644 ${WORKSPACE}/EKS_Node_template.yaml"
+                        sh "aws cloudformation create-stack --stack-name ${stackName} --template-body file://${WORKSPACE}/EKS_Node_template.yaml --region ${region}"
+
+                        def stackStatus = sh(script: "aws cloudformation describe-stacks --stack-name ${stackName} --query Stacks[0].StackStatus --output text --region ${region}", returnStdout: true).trim()
+                        def maxAttempts = 20
+                        def attempts = 0
+                        while (stackStatus != 'CREATE_COMPLETE' && attempts < maxAttempts) {
+                            echo "Stack status: ${stackStatus}"
+                            sleep 60
+                            stackStatus = sh(script: "aws cloudformation describe-stacks --stack-name ${stackName} --query Stacks[0].StackStatus --output text --region ${region}", returnStdout: true).trim()
+                            attempts++
+                        }
+                        if (stackStatus == 'CREATE_COMPLETE') {
+                            echo "Stack created successfully."
+                        } else {
+                            echo "Stack creation timeout: 1200 seconds reached. Current status: ${stackStatus}"
+                            error("Stack creation failed: timeout reached.")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
